@@ -296,11 +296,12 @@ interface QuickModalProps {
   visible: boolean;
   initial?: QuickTransaction | null;
   categories: Category[];
+  accounts: Account[];
   onClose: () => void;
   onSave: (q: Omit<QuickTransaction, 'id'> & { id?: string }) => void;
 }
 
-function QuickModal({ visible, initial, categories, onClose, onSave }: QuickModalProps) {
+function QuickModal({ visible, initial, categories, accounts, onClose, onSave }: QuickModalProps) {
   const scheme = useColorScheme();
   const C = Colors[scheme];
   const s = sheetStyles(C, scheme);
@@ -311,6 +312,8 @@ function QuickModal({ visible, initial, categories, onClose, onSave }: QuickModa
   const [amount, setAmount] = useState(initial?.amount?.toString() ?? '');
   const [catId, setCatId] = useState(initial?.categoryId ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
+  const [isFavorite, setIsFavorite] = useState(!!initial?.favorite);
+  const [defaultAccId, setDefaultAccId] = useState<string | undefined>(initial?.defaultAccountId);
 
   // Recurrencia
   const [isRecurring, setIsRecurring] = useState(!!initial?.recurrence);
@@ -327,6 +330,8 @@ function QuickModal({ visible, initial, categories, onClose, onSave }: QuickModa
     setAmount(initial?.amount?.toString() ?? '');
     setCatId(initial?.categoryId ?? '');
     setNote(initial?.note ?? '');
+    setIsFavorite(!!initial?.favorite);
+    setDefaultAccId(initial?.defaultAccountId);
     setIsRecurring(!!initial?.recurrence);
     setFrequency(initial?.recurrence?.frequency ?? 'monthly');
     setDayOfMonth(initial?.recurrence?.dayOfMonth?.toString() ?? '1');
@@ -354,6 +359,9 @@ function QuickModal({ visible, initial, categories, onClose, onSave }: QuickModa
       note: note.trim() || undefined,
       recurrence: recurrenceObj,
       lastAutoExec: initial?.lastAutoExec, // conservar si existe
+      lastUsed: initial?.lastUsed,         // conservar si existe
+      favorite: isFavorite,
+      defaultAccountId: defaultAccId,
     });
     onClose();
   };
@@ -363,7 +371,19 @@ function QuickModal({ visible, initial, categories, onClose, onSave }: QuickModa
       <KeyboardAvoidingView style={s.overlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={s.sheet}>
           <View style={s.handle} />
-          <Text style={s.sheetTitle}>{initial ? 'Editar acceso rápido' : 'Nuevo acceso rápido'}</Text>
+          {/* Título + estrella favorito */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <Text style={s.sheetTitle}>{initial ? 'Editar acceso rápido' : 'Nuevo acceso rápido'}</Text>
+            <TouchableOpacity
+              onPress={() => setIsFavorite((f) => !f)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: isFavorite ? '#FFB80018' : C.border + '40' }}
+            >
+              <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={16} color={isFavorite ? '#FFB800' : C.textSecondary} />
+              <Text style={{ fontSize: 12, fontWeight: '700', color: isFavorite ? '#FFB800' : C.textSecondary }}>
+                {isFavorite ? 'Favorito' : 'Favorito'}
+              </Text>
+            </TouchableOpacity>
+          </View>
           <View style={s.typeRow}>
             {(['expense', 'income'] as TransactionType[]).map((t) => (
               <TouchableOpacity key={t} style={[s.typeBtn, type === t && { backgroundColor: t === 'income' ? C.income : C.expense }]} onPress={() => { setType(t); setCatId(''); setIcon(t === 'income' ? 'briefcase' : 'flag'); }}>
@@ -496,6 +516,43 @@ function QuickModal({ visible, initial, categories, onClose, onSave }: QuickModa
               })}
             </View>
 
+            {/* Cuenta por defecto */}
+            {accounts.length > 0 && (
+              <>
+                <Text style={s.label}>Cuenta por defecto</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginBottom: 16 }}>
+                  {/* Opción: Sin preferencia */}
+                  <TouchableOpacity
+                    onPress={() => setDefaultAccId(undefined)}
+                    style={[
+                      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, borderWidth: 1, borderColor: C.border, backgroundColor: C.background, minWidth: 90 },
+                      !defaultAccId && { borderColor: C.textSecondary, borderWidth: 2 },
+                    ]}
+                  >
+                    <Ionicons name="close-circle-outline" size={16} color={!defaultAccId ? C.text : C.textSecondary} />
+                    <Text style={{ fontSize: 13, fontWeight: !defaultAccId ? '700' : '500', color: !defaultAccId ? C.text : C.textSecondary }}>Sin preferencia</Text>
+                  </TouchableOpacity>
+
+                  {accounts.map((acc) => {
+                    const selected = defaultAccId === acc.id;
+                    return (
+                      <TouchableOpacity
+                        key={acc.id}
+                        onPress={() => setDefaultAccId(acc.id)}
+                        style={[
+                          { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, borderWidth: 1, borderColor: C.border, backgroundColor: C.background, minWidth: 100 },
+                          selected && { backgroundColor: acc.color + '22', borderColor: acc.color, borderWidth: 2 },
+                        ]}
+                      >
+                        <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: acc.color }} />
+                        <Text style={{ fontSize: 13, fontWeight: selected ? '700' : '500', color: selected ? acc.color : C.text }} numberOfLines={1}>{acc.name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </>
+            )}
+
             <TouchableOpacity style={[s.saveBtn, { backgroundColor: accent }]} onPress={handleSave}>
               <Text style={s.saveBtnText}>Guardar</Text>
             </TouchableOpacity>
@@ -551,6 +608,8 @@ export default function SettingsScreen() {
   const handleDeleteAcc = (a: Account) => Alert.alert('Eliminar cuenta', `¿Eliminar "${a.name}"? Los movimientos no se borran.`, [{ text: 'Cancelar', style: 'cancel' }, { text: 'Eliminar', style: 'destructive', onPress: () => deleteAccount(a.id) }]);
 
   const topPad = insets.top > 0 ? insets.top : (Platform.OS === 'android' ? (RNStatusBar.currentHeight ?? 24) : 20);
+  const TAB_BAR_H = Platform.OS === 'ios' ? 80 : 64;
+  const tabPad = TAB_BAR_H + 16;
   const s = styles(C, isDark, topPad);
 
   const TABS: { key: TabKey; label: string; icon: IoniconName }[] = [
@@ -588,7 +647,7 @@ export default function SettingsScreen() {
         </ScrollView>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: tabPad }}>
 
         {/* ━━━ CUENTAS ━━━ */}
         {activeTab === 'accounts' && (
@@ -687,14 +746,30 @@ export default function SettingsScreen() {
                         <Ionicons name={q.icon as IoniconName} size={22} color={clr} />
                       </View>
                       <View style={s.rowInfo}>
-                        <Text style={s.rowTitle}>{q.name}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={s.rowTitle}>{q.name}</Text>
+                          {q.favorite && <Ionicons name="star" size={11} color="#FFB800" />}
+                        </View>
                         <Text style={s.rowSub}>
                           {cat?.name ?? '–'}
                           {q.amount ? `  ·  ${q.type === 'expense' ? '−' : '+'}${formatCurrency(q.amount)}` : '  ·  Monto libre'}
                           {q.recurrence ? `  ·  ${formatRecurrence(q.recurrence)}` : ''}
+                          {q.defaultAccountId ? `  ·  ${accounts.find(a => a.id === q.defaultAccountId)?.name ?? ''}` : ''}
                         </Text>
                       </View>
                       {q.recurrence && <Ionicons name="repeat" size={14} color={C.tint} style={{ marginHorizontal: 4 }} />}
+                      {/* Estrella favorito sin abrir modal */}
+                      <TouchableOpacity
+                        onPress={() => updateQuickTransaction({ ...q, favorite: !q.favorite })}
+                        style={{ padding: 6 }}
+                        hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+                      >
+                        <Ionicons
+                          name={q.favorite ? 'star' : 'star-outline'}
+                          size={18}
+                          color={q.favorite ? '#FFB800' : C.border}
+                        />
+                      </TouchableOpacity>
                       <TouchableOpacity style={s.editBtn} onPress={() => { setEditQuick(q); setQuickModal(true); }}>
                         <Text style={[s.editBtnText, { color: C.tint }]}>Editar</Text>
                       </TouchableOpacity>
@@ -788,7 +863,7 @@ export default function SettingsScreen() {
 
       <AccountModal visible={accModal} initial={editAcc} onClose={() => { setAccModal(false); setEditAcc(null); }} onSave={handleSaveAcc} />
       <CategoryModal visible={catModal} initial={editCat} defaultType={newCatType} onClose={() => { setCatModal(false); setEditCat(null); }} onSave={handleSaveCat} />
-      <QuickModal visible={quickModal} initial={editQuick} categories={categories} onClose={() => { setQuickModal(false); setEditQuick(null); }} onSave={handleSaveQuick} />
+      <QuickModal visible={quickModal} initial={editQuick} categories={categories} accounts={accounts} onClose={() => { setQuickModal(false); setEditQuick(null); }} onSave={handleSaveQuick} />
     </View>
   );
 }

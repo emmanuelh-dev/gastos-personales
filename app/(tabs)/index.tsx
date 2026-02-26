@@ -1,6 +1,7 @@
 import type { IoniconName } from '@/components/CategoryIcon';
 import FinanceChart from '@/components/FinanceChart';
 import TransactionModal from '@/components/TransactionModal';
+import TransferModal from '@/components/TransferModal';
 import { Colors } from '@/constants/theme';
 import type { QuickTransaction, TransactionType } from '@/context/FinanceContext';
 import { useFinance, type Account } from '@/context/FinanceContext';
@@ -46,7 +47,7 @@ export default function HomeScreen() {
     transactions, quickTransactions, accounts,
     totalBalance, totalIncome, totalExpense,
     getCategoryById, getAccountById, getAccountBalance, getAccountExpense,
-    deleteTransaction, addTransaction,
+    deleteTransaction, addTransaction, updateQuickTransaction,
   } = useFinance();
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -54,6 +55,7 @@ export default function HomeScreen() {
   const [prefill, setPrefill] = useState<Partial<QuickTransaction> | null>(null);
   const [defaultAccId, setDefaultAccId] = useState<string | undefined>(undefined);
   const [balanceHidden, setBalanceHidden] = useState(false);
+  const [transferVisible, setTransferVisible] = useState(false);
 
   const openModal = (type: TransactionType, quick?: QuickTransaction, accountId?: string) => {
     setModalType(type);
@@ -64,14 +66,37 @@ export default function HomeScreen() {
 
   const handleQuickTap = useCallback(
     (q: QuickTransaction) => {
+      // Actualizar lastUsed para que suba al frente
+      const now = new Date().toISOString();
+      updateQuickTransaction({ ...q, lastUsed: now });
+
       if (q.amount) {
-        addTransaction({ type: q.type, amount: q.amount, description: q.name, categoryId: q.categoryId, note: q.note });
+        addTransaction({ type: q.type, amount: q.amount, description: q.name, categoryId: q.categoryId, accountId: q.defaultAccountId, note: q.note });
         if (Platform.OS === 'android') ToastAndroid.show(`${q.name} registrado`, ToastAndroid.SHORT);
       } else {
-        openModal(q.type, q);
+        openModal(q.type, q, q.defaultAccountId);
       }
     },
-    [addTransaction]
+    [addTransaction, updateQuickTransaction]
+  );
+
+  // Ordenar accesos: favoritos > usados recientemente > resto (sin usar mantienen orden original)
+  const sortedQuickTransactions = [...quickTransactions].sort((a, b) => {
+    // Favoritos siempre primero
+    if (a.favorite && !b.favorite) return -1;
+    if (!a.favorite && b.favorite) return 1;
+    // Dentro de cada grupo, más recientes primero
+    if (a.lastUsed && b.lastUsed) return b.lastUsed.localeCompare(a.lastUsed);
+    if (a.lastUsed) return -1;
+    if (b.lastUsed) return 1;
+    return 0;
+  });
+
+  const handleFavoriteToggle = useCallback(
+    (q: QuickTransaction) => {
+      updateQuickTransaction({ ...q, favorite: !q.favorite });
+    },
+    [updateQuickTransaction]
   );
 
   const confirmDelete = useCallback(
@@ -85,6 +110,9 @@ export default function HomeScreen() {
   );
 
   const topPad = insets.top > 0 ? insets.top : (Platform.OS === 'android' ? (RNStatusBar.currentHeight ?? 24) : 20);
+  // Altura real del tab bar: height fija del layout + safe area inferior del dispositivo
+  const TAB_BAR_H = Platform.OS === 'ios' ? 80 : 64;
+  const tabPad = TAB_BAR_H + (insets.bottom > 0 ? 0 : 0) + 16; // insets.bottom ya está incluido en los 80/64
   const isPositive = totalBalance >= 0;
   const s = styles(C, isDark, topPad);
 
@@ -128,22 +156,38 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 110 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: tabPad }}>
 
         {/* ── BOTONES PRINCIPALES ── */}
         <View style={s.actionRow}>
-          <TouchableOpacity style={s.incomeBtn} onPress={() => openModal('income')} activeOpacity={0.85}>
-            <Ionicons name="add-circle-outline" size={26} color="#fff" />
-            <View><Text style={s.actionLabel}>Agregar</Text><Text style={s.actionSub}>Ingreso</Text></View>
+          {/* Ingreso */}
+          <TouchableOpacity style={s.roundBtnWrapper} onPress={() => openModal('income')} activeOpacity={0.82}>
+            <View style={[s.roundBtn, { backgroundColor: C.income, shadowColor: C.income }]}>
+              <Ionicons name="add" size={28} color="#fff" />
+            </View>
+            <Text style={s.roundBtnLabel}>Ingreso</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={s.expenseBtn} onPress={() => openModal('expense')} activeOpacity={0.85}>
-            <Ionicons name="remove-circle-outline" size={26} color="#fff" />
-            <View><Text style={s.actionLabel}>Registrar</Text><Text style={s.actionSub}>Gasto</Text></View>
+
+          {/* Transferir (centro) — siempre visible, pero desactivado si hay <2 cuentas) */}
+          <TouchableOpacity
+            style={[s.roundBtnWrapper, accounts.length < 2 && { opacity: 0.38 }]}
+            onPress={() => accounts.length >= 2 && setTransferVisible(true)}
+            activeOpacity={0.82}
+          >
+            <View style={[s.roundBtn, { backgroundColor: C.tint, shadowColor: C.tint }]}>
+              <Ionicons name="swap-horizontal" size={24} color="#fff" />
+            </View>
+            <Text style={s.roundBtnLabel}>Transferir</Text>
+          </TouchableOpacity>
+
+          {/* Gasto */}
+          <TouchableOpacity style={s.roundBtnWrapper} onPress={() => openModal('expense')} activeOpacity={0.82}>
+            <View style={[s.roundBtn, { backgroundColor: C.expense, shadowColor: C.expense }]}>
+              <Ionicons name="remove" size={28} color="#fff" />
+            </View>
+            <Text style={s.roundBtnLabel}>Gasto</Text>
           </TouchableOpacity>
         </View>
-
-        {/* ── GRAFICO ── */}
-        <FinanceChart />
 
         {/* ── TARJETAS DE CUENTAS ── */}
         {accounts.length > 0 && (
@@ -225,12 +269,32 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.quickList}>
-              {quickTransactions.map((q) => {
+              {sortedQuickTransactions.map((q) => {
                 const cat = getCategoryById(q.categoryId);
                 const clr = cat?.color ?? (q.type === 'income' ? C.income : C.expense);
                 const recLabel = q.recurrence ? formatRecurrence(q.recurrence) : null;
                 return (
-                  <TouchableOpacity key={q.id} style={s.quickCard} onPress={() => handleQuickTap(q)} activeOpacity={0.75}>
+                  <TouchableOpacity
+                    key={q.id}
+                    style={s.quickCard}
+                    onPress={() => handleQuickTap(q)}
+                    onLongPress={() => handleFavoriteToggle(q)}
+                    activeOpacity={0.75}
+                    delayLongPress={400}
+                  >
+                    {/* Estrella de favorito */}
+                    <TouchableOpacity
+                      style={s.favStar}
+                      onPress={() => handleFavoriteToggle(q)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Ionicons
+                        name={q.favorite ? 'star' : 'star-outline'}
+                        size={13}
+                        color={q.favorite ? '#FFB800' : C.border}
+                      />
+                    </TouchableOpacity>
+
                     <View style={[s.quickIconBg, { backgroundColor: clr + '22' }]}>
                       <Ionicons name={q.icon as IoniconName} size={26} color={clr} />
                     </View>
@@ -252,7 +316,8 @@ export default function HomeScreen() {
             </ScrollView>
           </>
         )}
-
+        {/* ── GRAFICO ── */}
+        <FinanceChart />
         {/* ── MOVIMIENTOS RECIENTES ── */}
         <View style={s.sectionHeader}>
           <Text style={s.sectionTitle}>Movimientos recientes</Text>
@@ -272,10 +337,13 @@ export default function HomeScreen() {
         ) : (
           <View style={s.txCard}>
             {transactions.slice(0, 50).map((tx, i) => {
+              const isTransfer = Boolean(tx.transferId);
               const cat = getCategoryById(tx.categoryId);
               const acc = tx.accountId ? getAccountById(tx.accountId) : undefined;
               const isIncome = tx.type === 'income';
-              const clr = cat?.color ?? (isIncome ? C.income : C.expense);
+              const clr = isTransfer
+                ? C.tint
+                : (cat?.color ?? (isIncome ? C.income : C.expense));
               return (
                 <TouchableOpacity
                   key={tx.id}
@@ -284,12 +352,22 @@ export default function HomeScreen() {
                   activeOpacity={0.7}
                 >
                   <View style={[s.txIconBg, { backgroundColor: clr + '20' }]}>
-                    <Ionicons name={(cat?.icon as IoniconName) ?? 'cash-outline'} size={22} color={clr} />
+                    <Ionicons
+                      name={isTransfer ? 'swap-horizontal' : ((cat?.icon as IoniconName) ?? 'cash-outline')}
+                      size={22}
+                      color={clr}
+                    />
                   </View>
                   <View style={s.txInfo}>
-                    <Text style={s.txDesc} numberOfLines={1}>{tx.description}</Text>
+                    <Text style={s.txDesc} numberOfLines={1}>
+                      {isTransfer
+                        ? (isIncome ? `← ${acc?.name ?? 'cuenta'}` : `${acc?.name ?? 'cuenta'} →`)
+                        : tx.description}
+                    </Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Text style={s.txMeta}>{cat?.name ?? 'Sin categoría'}  ·  {formatDate(tx.date)}</Text>
+                      <Text style={s.txMeta}>
+                        {isTransfer ? 'Transferencia' : (cat?.name ?? 'Sin categoría')}  ·  {formatDate(tx.date)}
+                      </Text>
                       {acc && (
                         <View style={[s.accPill, { backgroundColor: acc.color + '25' }]}>
                           <Ionicons name={ACCOUNT_TYPE_ICONS[acc.type]} size={10} color={acc.color} />
@@ -298,8 +376,8 @@ export default function HomeScreen() {
                       )}
                     </View>
                   </View>
-                  <Text style={[s.txAmount, { color: isIncome ? C.income : C.expense }]}>
-                    {isIncome ? '+' : '−'}{formatCurrency(tx.amount)}
+                  <Text style={[s.txAmount, { color: isTransfer ? C.tint : (isIncome ? C.income : C.expense) }]}>
+                    {isTransfer ? (isIncome ? '+' : '−') : (isIncome ? '+' : '−')}{formatCurrency(tx.amount)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -314,6 +392,10 @@ export default function HomeScreen() {
         defaultAccountId={defaultAccId}
         prefillQuick={prefill}
         onClose={() => { setModalVisible(false); setPrefill(null); setDefaultAccId(undefined); }}
+      />
+      <TransferModal
+        visible={transferVisible}
+        onClose={() => setTransferVisible(false)}
       />
     </View>
   );
@@ -338,12 +420,15 @@ const styles = (C: typeof Colors.light, isDark: boolean, topPad: number) =>
     statLabel: { fontSize: 11, color: C.textSecondary, marginBottom: 1 },
     statValue: { fontSize: 15, fontWeight: '700' },
     statDivider: { width: 1, height: 32, backgroundColor: C.border, marginHorizontal: 12 },
-    // Botones
-    actionRow: { flexDirection: 'row', gap: 12, marginHorizontal: 16, marginTop: 20, marginBottom: 8 },
-    incomeBtn: { flex: 1, backgroundColor: C.income, borderRadius: 18, paddingVertical: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: C.income, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 10, elevation: 6 },
-    expenseBtn: { flex: 1, backgroundColor: C.expense, borderRadius: 18, paddingVertical: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 10, shadowColor: C.expense, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 10, elevation: 6 },
-    actionLabel: { fontSize: 15, fontWeight: '800', color: '#fff' },
-    actionSub: { fontSize: 11, color: 'rgba(255,255,255,0.8)', marginTop: 1 },
+    // Botones de acción redondos
+    actionRow: { flexDirection: 'row', gap: 28, marginHorizontal: 16, marginTop: 20, marginBottom: 12 },
+    roundBtnWrapper: { alignItems: 'center', gap: 8 },
+    roundBtn: {
+      width: 48, height: 48, borderRadius: 32,
+      alignItems: 'center', justifyContent: 'center',
+      shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 10, elevation: 8,
+    },
+    roundBtnLabel: { fontSize: 12, fontWeight: '700', color: C.text, textAlign: 'center' },
     // Secciones
     sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 20, marginTop: 22, marginBottom: 12 },
     sectionTitle: { fontSize: 16, fontWeight: '700', color: C.text },
@@ -372,6 +457,7 @@ const styles = (C: typeof Colors.light, isDark: boolean, topPad: number) =>
     quickAmountFree: { fontSize: 10, color: C.textSecondary },
     recurrencePill: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8, backgroundColor: C.border },
     recurrencePillText: { fontSize: 9, fontWeight: '700' },
+    favStar: { position: 'absolute', top: 8, right: 8 },
     // Movimientos
     countBadge: { backgroundColor: C.border, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
     countText: { fontSize: 12, fontWeight: '700', color: C.textSecondary },

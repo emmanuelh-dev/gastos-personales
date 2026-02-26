@@ -41,6 +41,7 @@ export interface Transaction {
   accountId?: string;
   date: string;
   note?: string;
+  transferId?: string; // presente en ambos lados de una transferencia
 }
 
 export interface QuickTransaction {
@@ -51,8 +52,11 @@ export interface QuickTransaction {
   categoryId: string;
   type: TransactionType;
   note?: string;
-  recurrence?: Recurrence;   // ← nuevo: config de recurrencia
-  lastAutoExec?: string;     // ← nuevo: última auto-ejecución (ISO string)
+  recurrence?: Recurrence;   // ← config de recurrencia
+  lastAutoExec?: string;     // ← última auto-ejecución (ISO string)
+  lastUsed?: string;         // ← última vez usado manualmente (ISO string)
+  favorite?: boolean;        // ← siempre primero en la lista
+  defaultAccountId?: string; // ← cuenta preseleccionada al ejecutar
 }
 
 interface FinanceState {
@@ -66,6 +70,7 @@ interface FinanceState {
 type Action =
   | { type: 'LOAD'; payload: FinanceState }
   | { type: 'ADD_TRANSACTION'; payload: Transaction }
+  | { type: 'ADD_TRANSFER'; payload: { from: Transaction; to: Transaction } }
   | { type: 'DELETE_TRANSACTION'; payload: string }
   | { type: 'ADD_CATEGORY'; payload: Category }
   | { type: 'UPDATE_CATEGORY'; payload: Category }
@@ -123,7 +128,15 @@ function reducer(state: FinanceState, action: Action): FinanceState {
   switch (action.type) {
     case 'LOAD': return action.payload;
     case 'ADD_TRANSACTION': return { ...state, transactions: [action.payload, ...state.transactions] };
-    case 'DELETE_TRANSACTION': return { ...state, transactions: state.transactions.filter((t) => t.id !== action.payload) };
+    case 'ADD_TRANSFER': return { ...state, transactions: [action.payload.from, action.payload.to, ...state.transactions] };
+    case 'DELETE_TRANSACTION': {
+      // Si es parte de una transferencia, eliminar ambos lados
+      const t = state.transactions.find((tx) => tx.id === action.payload);
+      if (t?.transferId) {
+        return { ...state, transactions: state.transactions.filter((tx) => tx.transferId !== t.transferId) };
+      }
+      return { ...state, transactions: state.transactions.filter((tx) => tx.id !== action.payload) };
+    }
     case 'ADD_CATEGORY': return { ...state, categories: [...state.categories, action.payload] };
     case 'UPDATE_CATEGORY': return { ...state, categories: state.categories.map((c) => c.id === action.payload.id ? action.payload : c) };
     case 'DELETE_CATEGORY': return { ...state, categories: state.categories.filter((c) => c.id !== action.payload) };
@@ -141,6 +154,7 @@ function reducer(state: FinanceState, action: Action): FinanceState {
 
 interface FinanceContextValue extends FinanceState {
   addTransaction: (t: Omit<Transaction, 'id' | 'date'>) => void;
+  addTransfer: (amount: number, fromAccountId: string, toAccountId: string, note?: string) => void;
   deleteTransaction: (id: string) => void;
   addCategory: (c: Omit<Category, 'id'>) => void;
   updateCategory: (c: Category) => void;
@@ -240,6 +254,21 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const addTransaction = useCallback((t: Omit<Transaction, 'id' | 'date'>) => {
     dispatch({ type: 'ADD_TRANSACTION', payload: { ...t, id: makeId('tx'), date: new Date().toISOString() } });
   }, []);
+
+  const addTransfer = useCallback((amount: number, fromAccountId: string, toAccountId: string, note?: string) => {
+    const transferId = makeId('transfer');
+    const date = new Date().toISOString();
+    // Categoría especial para transferencias (ID fijo)
+    const TRANSFER_CAT = 'cat-transfer';
+    dispatch({
+      type: 'ADD_TRANSFER',
+      payload: {
+        from: { id: makeId('tx'), type: 'expense', amount, description: 'Transferencia', categoryId: TRANSFER_CAT, accountId: fromAccountId, date, note, transferId },
+        to: { id: makeId('tx'), type: 'income', amount, description: 'Transferencia', categoryId: TRANSFER_CAT, accountId: toAccountId, date, note, transferId },
+      },
+    });
+  }, []);
+
   const deleteTransaction = useCallback((id: string) => dispatch({ type: 'DELETE_TRANSACTION', payload: id }), []);
 
   const addCategory = useCallback((c: Omit<Category, 'id'>) => dispatch({ type: 'ADD_CATEGORY', payload: { ...c, id: makeId('cat') } }), []);
@@ -276,7 +305,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   return (
     <FinanceContext.Provider value={{
       ...state,
-      addTransaction, deleteTransaction,
+      addTransaction, addTransfer, deleteTransaction,
       addCategory, updateCategory, deleteCategory,
       addQuickTransaction, updateQuickTransaction, deleteQuickTransaction,
       addAccount, updateAccount, deleteAccount,
